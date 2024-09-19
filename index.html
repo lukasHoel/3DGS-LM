@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="description"
+        content="3DGS-LM: Faster Gaussian-Splatting Optimization with Levenberg-Marquardt">
+  <meta name="keywords" content="3DGS-LM, 3DGS, Gaussian-Splatting, Levenberg-Marquardt, Optimization">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>3DGS-LM: Faster Gaussian-Splatting Optimization with Levenberg-Marquardt</title>
+
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro"
+        rel="stylesheet">
+
+  <link rel="stylesheet" href="./static/css/bulma.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-carousel.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-slider.min.css">
+  <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
+  <link rel="stylesheet" href="./static/css/index.css">
+
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script defer src="./static/js/fontawesome.all.min.js"></script>
+  <script src="./static/js/bulma-carousel.min.js"></script>
+  <script src="./static/js/bulma-slider.min.js"></script>
+  <script src="./static/js/index.js"></script>
+</head>
+<body>
+
+<nav class="navbar" role="navigation" aria-label="main navigation">
+  <div class="navbar-brand">
+    <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false">
+      <span aria-hidden="true"></span>
+      <span aria-hidden="true"></span>
+      <span aria-hidden="true"></span>
+    </a>
+  </div>
+  <div class="navbar-menu">
+    <div class="navbar-start" style="flex-grow: 1; justify-content: center;">
+      <a class="navbar-item" href="https://niessnerlab.org/members/lukas_hoellein/profile.html">
+      <span class="icon">
+          <i class="fas fa-home"></i>
+      </span>
+      </a>
+
+      <div class="navbar-item has-dropdown is-hoverable">
+        <a class="navbar-link">
+          More Research
+        </a>
+        <div class="navbar-dropdown">
+          <a class="navbar-item" href="https://niessnerlab.org/publications.html">
+            TUM Visual Computing
+          </a>
+          <a class="navbar-item" href="https://lukashoel.github.io/ViewDiff/">
+            ViewDiff
+          </a>
+          <a class="navbar-item" href="https://lukashoel.github.io/text-to-room/">
+            Text2Room
+          </a>
+          <a class="navbar-item" href="https://lukashoel.github.io/stylemesh/">
+            StyleMesh
+          </a>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</nav>
+
+
+<section class="hero">
+  <div class="hero-body">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered">
+        <div class="column has-text-centered">
+          <h1 class="title is-1 publication-title">3DGS-LM: Faster Gaussian-Splatting Optimization with Levenberg-Marquardt</h1>
+          <!-- <h2 class="title is-5 publication-title">CVPR 2024</h2> -->
+          <div class="is-size-5 publication-authors">
+            <span class="author-block">
+              <a href="https://niessnerlab.org/members/lukas_hoellein/profile.html">Lukas Höllein</a><sup>1</sup>,
+            </span>
+            <span class="author-block">
+              <a href="https://aljazbozic.github.io/">Aljaž Božič</a><sup>2</sup>,
+            </span>
+            <span class="author-block">
+                <a href="https://zollhoefer.com/">Michael Zollhöfer</a><sup>2</sup>,
+            </span>
+            <span class="author-block">
+              <a href="https://niessnerlab.org/members/matthias_niessner/profile.html">Matthias Nießner</a><sup>1</sup>
+            </span>
+          </div>
+
+          <div class="is-size-5 publication-authors">
+            <span class="author-block"><sup>1</sup>Technical University of Munich,</span>
+            <span class="author-block"><sup>2</sup>Meta</span>
+          </div>
+
+          <div class="column has-text-centered">
+            <div class="publication-links">
+              <!-- PDF Link (Original) -->
+              <span class="link-block">
+                <a href="static/3DGS-LM_paper.pdf"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                      <i class="fas fa-file-pdf"></i>
+                  </span>
+                  <span>Paper</span>
+                </a>
+              </span>
+              <!-- arXiv Link. -->
+              <span class="link-block">
+                <a href=""
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                      <i class="ai ai-arxiv"></i>
+                  </span>
+                  <span>arXiv</span>
+                </a>
+              </span>
+              <!-- Video Link. -->
+              <span class="link-block">
+                <a href="https://youtu.be/tDiGuGMssg8"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                      <i class="fab fa-youtube"></i>
+                  </span>
+                  <span>Video</span>
+                </a>
+              </span>
+              <!-- Code Link. -->
+              <span class="link-block">
+                <a href="https://github.com/lukasHoel/3DGS-LM"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                      <i class="fab fa-github"></i>
+                  </span>
+                  <span>Code</span>
+                  </a>
+              </span>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="hero teaser">
+  <div class="container is-max-desktop">
+    <div class="hero-body">
+      <img src="static/images/teaser.jpg" alt="ViewDiff Teaser">
+      <h2 class="subtitle has-text-centered">
+        <span class="dnerf">3DGS-LM</span> accelerates Gaussian-Splatting optimization by replacing the ADAM optimizer with Levenberg-Marquardt.
+      </h2>
+    </div>
+  </div>
+</section>
+
+
+<section class="hero is-light is-small">
+  <div class="hero-body">
+    <div class="container">
+      <div id="results-carousel" class="carousel results-carousel">
+        <div class="item">
+          <video autoplay controls muted loop height="100%">
+            <source src="static/images/sample1.mp4"
+                    type="video/mp4">
+          </video>
+          <h2 class="subtitle has-text-centered" style="margin-bottom: 20px;">
+            Runtime Comparison of 3DGS with ADAM (left) and 3DGS with our LM optimizer (right).
+          </h2>
+        </div>
+        <div class="item">
+          <video autoplay controls muted loop height="100%">
+            <source src="static/images/sample2.mp4"
+                    type="video/mp4">
+          </video>
+          <h2 class="subtitle has-text-centered" style="margin-bottom: 20px;">
+            Runtime Comparison of 3DGS with ADAM (left) and 3DGS with our LM optimizer (right).
+          </h2>
+        </div>
+        <div class="item">
+            <video autoplay controls muted loop height="100%">
+              <source src="static/images/sample4.mp4"
+                      type="video/mp4">
+            </video>
+            <h2 class="subtitle has-text-centered" style="margin-bottom: 20px;">
+              Runtime Comparison of 3DGS with ADAM (left) and 3DGS with our LM optimizer (right).
+            </h2>
+        </div>
+        <div class="item">
+          <video autoplay controls muted loop height="100%">
+            <source src="static/images/sample3.mp4"
+                    type="video/mp4">
+          </video>
+          <h2 class="subtitle has-text-centered" style="margin-bottom: 20px;">
+            Runtime Comparison of 3DGS with ADAM (left) and 3DGS with our LM optimizer (right).
+          </h2>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <!-- Abstract. -->
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-3">Abstract</h2>
+        <div class="content has-text-justified">
+          <p>
+            We present 3DGS-LM, a new method that accelerates the reconstruction of 3D Gaussian Splatting (3DGS) by replacing its ADAM optimizer with a tailored Levenberg-Marquardt (LM).
+            Existing methods reduce the optimization time by decreasing the number of Gaussians or by improving the implementation of the differentiable rasterizer.
+            However, they still rely on the ADAM optimizer to fit Gaussian parameters of a scene in thousands of iterations, which can take up to an hour.
+            To this end, we change the optimizer to LM that runs in conjunction with the 3DGS differentiable rasterizer.
+            For efficient GPU parallization, we propose a caching data structure for intermediate gradients that allows us to efficiently calculate Jacobian-vector products in custom CUDA kernels.
+            In every LM iteration, we calculate update directions from multiple image subsets using these kernels and combine them in a weighted mean.
+            Overall, our method is 30% faster than the original 3DGS while obtaining the same reconstruction quality.
+            Our optimization is also agnostic to other methods that acclerate 3DGS, thus enabling even faster speedups compared to vanilla 3DGS.
+          </p>
+        </div>
+      </div>
+    </div>
+    <!--/ Abstract. -->
+
+    <!-- Paper video. -->
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-3">Video</h2>
+        <div class="publication-video">
+          <iframe src="https://www.youtube.com/embed/tDiGuGMssg8?si=xMTlUm2uaubH6Qjo" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+        </div>
+      </div>
+    </div>
+    <!--/ Paper video. -->
+
+
+    <!-- Main Idea. -->
+    <div class="columns is-centered has-text-centered">
+        <div class="column is-four-fifths">
+            <h2 class="title is-3">Overview</h2>
+            <div class="content has-text-justified">
+            <p>
+                We accelerate 3DGS optimization by replacing the commonly used ADAM optimizer with a tailored Levenberg-Marquardt (LM).
+                In every LM iteration, we compute a photometric loss and obtain the parameter update vector by solving the normal equations.
+            </p>
+            <img src="static/images/overview.jpg" alt="We replace the ADAM optimizer with LM.">
+            </div>
+        </div>
+    </div>
+    <!--/ Main Idea. -->
+
+    <!-- Parallelization. -->
+    <div class="columns is-centered has-text-centered">
+        <div class="column is-four-fifths">
+            <h2 class="title is-3">Parallelization Scheme for PCG</h2>
+            <div class="content has-text-justified">
+                <p>
+                    We propose a highly-efficient GPU parallization scheme for the preconditioned conjugate gradient (PCG) algorithm within the inner LM loop in order to obtain the respective update directions.
+                    To this end, we extend the differentiable 3DGS rasterizer with custom CUDA kernels that compute Jacobian-vector products.
+                </p>
+                <img src="static/images/pcg-alg.jpg" style="max-width:600px;width:100%" alt="We obtain update directions by solving the normal equations with PCG.">
+            </div>
+            <div class="content has-text-justified">
+            <p>
+                Our proposed caching data structure for intermediate gradients allows us to perform the required Jacobien-vector products fast and efficiently in a data-parallel fashion.
+                Before PCG starts, we create the gradient cache following the per-pixel parallelization of 3DGS.
+                Afterwards, we sort the cache by Gaussians to ensure coalesced read accesses.
+                The cache decouples splats along rays, which allows us to parallelize per-pixel-per-splat during PCG.
+            </p>
+            <img src="static/images/parallelization-cropped.jpg" alt="Our key contribution is an efficient implementation of PCG in custom CUDA kernels.">
+            </div>
+        </div>
+    </div>
+    <!--/ Parallelization. -->
+
+    <!-- Two-Stage-Comparison. -->
+    <div class="columns is-centered has-text-centered">
+        <div class="column is-four-fifths">
+            <h2 class="title is-3">Two-Stage Approach</h2>
+            <div class="content has-text-justified">
+            <p>
+                First, we use the original ADAM optimizer and densification scheme to arrive at an initialization for all Gaussians.
+                Second, we employ the Levenberg-Marquardt algorithm to finish optimization.
+                In order to scale caching to high-resolution image datasets, we calculate update directions from multiple image subsets and combine them in a weighted mean.
+            </p>
+            <img src="static/images/two-stage-approach.jpg" alt="The two-stage approach is faster than only using ADAM and only using LM">
+            </div>
+            <div class="content has-text-justified">
+            <p>
+                Compared to only using ADAM, we converge faster when using the LM optimizer in the second stage of the optimization.
+                For example, after running ADAM for 6000 or 8000 iterations, we converge to the same quality faster with our novel optimizer.
+                It is also possible to use LM from the beginning, however this does not bring any additional speed-up.
+                Results reported on the "garden" scene from the MipNeRF360 dataset without densification.
+            </p>
+            <img src="static/images/two-stage-comparison.jpg" alt="The two-stage approach is faster than only using ADAM and only using LM">
+            </div>
+        </div>
+    </div>
+    <!--/ Two-Stage-Comparison. -->
+
+    <!-- Main Results. -->
+    <div class="columns is-centered has-text-centered">
+        <div class="column is-four-fifths">
+            <h2 class="title is-3">Comparison To Baselines</h2>
+            <div class="content has-text-justified">
+            <p>
+                By adding our method to baselines, we accelerate the optimization time by 30% on average while achieving similar quality.
+                We can combine our method with others, that improve runtime along different axes.
+                This demonstrates that our method offers an orthogonal improvement, i.e., the LM optimizer can be plugged into many existing methods.
+            </p>
+            <img src="static/images/quant-results.jpg" alt="Quantitative Comparison To Baselines.">
+            </div>
+        </div>
+    </div>
+    <!--/ Main Results. -->
+
+    <!-- Runtime. -->
+    <div class="columns is-centered has-text-centered">
+        <div class="column is-four-fifths">
+            <h2 class="title is-3">Runtime Analysis</h2>
+            <div class="content has-text-justified">
+            <p>
+                One iteration of our LM optimizer is dominated by solving PCG and building the cache.
+                When running PCG, we execute the applyJ and applyJT kernels multiple times using the per-pixel-per-splat parallelization pattern.
+                In contrast, we execute the buildCache kernel once and parallelize per-pixel, which is only marginally faster.
+                This demonstrates the speed advantage obtained by using our proposed caching structure.
+                All results reported on the “garden” scene from the Mip-NeRF360 dataset after densification is completed.
+            </p>
+            <img src="static/images/runtime_bar_graph.jpg" alt="Runtime of our custom CUDA kernels over multiple LM iterations.">
+            </div>
+        </div>
+    </div>
+    <!--/ Runtime. -->
+
+  </div>
+</section>
+
+<section class="section" id="BibTeX">
+  <div class="container is-max-desktop content">
+    <h2 class="title">BibTeX</h2>
+    <pre><code>@preprint{hoellein_2024_3dgslm,
+    title={3DGS-LM: Faster Gaussian-Splatting Optimization with Levenberg-Marquardt},
+    author={H{\"o}llein, Lukas and Bo\v{z}i\v{c}, Alja\v{z} and Zollh{\"o}fer, Michael and Nie{\ss}ner, Matthias},
+    booktitle={arXiV},
+    year={2024}
+}</code></pre>
+  </div>
+</section>
+
+
+<footer class="footer">
+  <div class="container">
+    <div class="content has-text-centered">
+      <a class="icon-link"
+         href="static/3DGS-LM_paper.pdf">
+        <i class="fas fa-file-pdf"></i>
+      </a>
+      <a class="icon-link" href="https://github.com/lukashoel" class="external-link" disabled>
+        <i class="fab fa-github"></i>
+      </a>
+    </div>
+    <div class="columns is-centered">
+      <div class="column is-8">
+        <div class="content">
+          <p>
+            Website source code borrowed from <a
+              href="https://github.com/nerfies/nerfies.github.io">here</a>.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
