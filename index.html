@@ -216,10 +216,10 @@
             Existing methods reduce the optimization time by decreasing the number of Gaussians or by improving the implementation of the differentiable rasterizer.
             However, they still rely on the ADAM optimizer to fit Gaussian parameters of a scene in thousands of iterations, which can take up to an hour.
             To this end, we change the optimizer to LM that runs in conjunction with the 3DGS differentiable rasterizer.
-            For efficient GPU parallization, we propose a caching data structure for intermediate gradients that allows us to efficiently calculate Jacobian-vector products in custom CUDA kernels.
+            For efficient GPU parallelization, we propose a caching data structure for intermediate gradients that allows us to efficiently calculate Jacobian-vector products in custom CUDA kernels.
             In every LM iteration, we calculate update directions from multiple image subsets using these kernels and combine them in a weighted mean.
             Overall, our method is 30% faster than the original 3DGS while obtaining the same reconstruction quality.
-            Our optimization is also agnostic to other methods that acclerate 3DGS, thus enabling even faster speedups compared to vanilla 3DGS.
+            Our optimization is also agnostic to other methods that accelerate 3DGS, thus enabling even faster speedups compared to vanilla 3DGS.
           </p>
         </div>
       </div>
@@ -259,7 +259,7 @@
             <h2 class="title is-3">Parallelization Scheme for PCG</h2>
             <div class="content has-text-justified">
                 <p>
-                    We propose a highly-efficient GPU parallization scheme for the preconditioned conjugate gradient (PCG) algorithm within the inner LM loop in order to obtain the respective update directions.
+                    We propose a highly-efficient GPU parallelization scheme for the preconditioned conjugate gradient (PCG) algorithm within the inner LM loop in order to obtain the respective update directions.
                     To this end, we extend the differentiable 3DGS rasterizer with custom CUDA kernels that compute Jacobian-vector products.
                 </p>
                 <img src="static/images/pcg-alg.jpg" style="max-width:600px;width:100%" alt="We obtain update directions by solving the normal equations with PCG.">
