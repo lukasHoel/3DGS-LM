@@ -23,6 +23,14 @@ Setup of the environment is identical. Please see the original repository for de
 This code release contains the submodule repositories ```diff-gaussian-rasterization``` and ```simple-knn```, so there is no need to clone them from the original source code.
 In particular, the ```diff-gaussian-rasterization``` module is modified and contains the implementation of our Jacobian-vector product CUDA kernels.
 
+### Building for AMD GPUs (ROCm/HIP)
+The two CUDA extensions (`diff-gaussian-rasterization` and `simple-knn`) also build on AMD GPUs with a ROCm build of PyTorch -- they compile through PyTorch's build-time HIP translation, so the install is the same aside from setting the target architecture:
+```
+PYTORCH_ROCM_ARCH=gfx90a python -m pip install ./submodules/simple-knn --no-build-isolation --no-deps
+PYTORCH_ROCM_ARCH=gfx90a python -m pip install ./submodules/diff-gaussian-rasterization --no-build-isolation --no-deps
+```
+Set `PYTORCH_ROCM_ARCH` to your GPU architecture (for example `gfx90a` for CDNA2 / MI200, or `gfx1100` for RDNA3). The matrix-free PCG solver is pure PyTorch and runs unchanged.
+
 ## How to fit a scene with 3DGS-LM?
 The script ```train.py``` is the main entry point to train a scene with our 3DGS-LM method. The ```arguments/__init__.py``` file contains additional command line arguments to run our method. One example how to execute our method on the ```garden``` scene from the ```Mip-NeRF 360``` dataset:
 
