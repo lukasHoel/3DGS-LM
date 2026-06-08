@@ -12,7 +12,9 @@
 #include "forward.h"
 #include "auxiliary.h"
 #include <cooperative_groups.h>
-#include <cooperative_groups/reduce.h>
+#if !defined(USE_ROCM)
+#include <cooperative_groups/reduce.h>  // HIP has no cg::reduce header; only this_grid/this_thread_block are used here
+#endif
 namespace cg = cooperative_groups;
 
 // Forward method for converting the input spherical harmonics
@@ -477,7 +479,7 @@ void FORWARD::preprocess(int P, int D, int M,
 	uint32_t* tiles_touched,
 	bool prefiltered)
 {
-	preprocessCUDA<GSGN_NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
+	preprocessCUDA<GSGN_NUM_CHANNELS><<<(P + 255) / 256, 256>>>(
 		P, D, M,
 		means3D,
 		scales,

@@ -2,17 +2,26 @@
 #include "gsgn.h"
 #include "rasterizer_impl.h"
 #include "auxiliary.h"
+#include "hip_warp_compat.h"
 #include <cooperative_groups.h>
 #include <iostream>
 #include <cub/cub.cuh>
 #include <thrust/scan.h>
 #include <thrust/execution_policy.h>
 
+#if defined(USE_ROCM)
+// torch's hipify maps the <cub/...> include to hipCUB and rewrites most cub::
+// symbols, but it misses some (e.g. cub::WarpScan inside a `using` alias). The
+// namespace alias makes every cub:: reference resolve regardless.
+namespace cub = hipcub;
+#endif
+
 namespace cg = cooperative_groups;
 
 #define SPARSE_J_NUM_THREADS 128
 #define SPARSE_JT_NUM_THREADS 128
-#define FULL_MASK 0xffffffff
+// FULL_MASK is defined in hip_warp_compat.h: 64-bit on HIP (the *_sync builtins
+// static_assert sizeof(mask) == 8) and 0xffffffff on CUDA.
 
 namespace CudaRasterizer {
     namespace GSGN {
@@ -88,37 +97,46 @@ namespace CudaRasterizer {
         }
 
         // DISTWAR - serialized atomic reduction (SW-S)
+        // Leader election over the lanes updating the same primitive. The
+        // recombination is via atomicAdd, so warp granularity is flexible: on
+        // HIP this spans the full hardware wavefront (a 64-bit same-primitive
+        // mask), which is correct and uses fewer atomics. __match_any_sync
+        // partitions lanes by value, so two distinct primitives in one wavefront
+        // each elect their own leader. laneId/sync_mask are wavefront-relative.
         template<typename ATOM_T>
         __device__ void atomred_vec(unsigned int laneId, size_t idx, ATOM_T** ptr, ATOM_T *val, size_t len, unsigned int balance_threshold) {
+#if defined(USE_ROCM) || defined(__HIP_PLATFORM_AMD__)
+            laneId = gsgn_wave_lane();
+#endif
             // a mask of threads in the warp updating the same primitive
-            unsigned same_mask = __match_any_sync(__activemask(), idx);
+            GSGN_LANE_MASK same_mask = __match_any_sync(__activemask(), idx);
 
             // number of threads in the warp updating the same primitive
-            unsigned same_ct = __popc(same_mask);
+            unsigned same_ct = gsgn_popc(same_mask);
 
             /* if number of threads updating current
             primitive exceeds balance threshold, perform
             serialized warp level reduction */
             if (same_ct >= balance_threshold) {
                 // thread with lowest id becomes the leader
-                unsigned leader = __ffs(same_mask) - 1;
+                unsigned leader = gsgn_ffs(same_mask) - 1;
 
                 // leader does not fetch from itself
-                same_mask &= ~(1 << leader);
+                same_mask &= ~gsgn_lane_bit(leader);
 
                 /* leader fetch and accumulate all parameters
                 from threads updating the same primitive */
                 while (same_mask) {
-                    unsigned target_lane = __ffs(same_mask) - 1;
+                    unsigned target_lane = gsgn_ffs(same_mask) - 1;
                     if (laneId == leader || laneId == target_lane) {
-                        unsigned sync_mask = (1 << leader) | (1 << target_lane);
+                        GSGN_LANE_MASK sync_mask = gsgn_lane_bit(leader) | gsgn_lane_bit(target_lane);
 
                         for (unsigned i = 0; i < len; ++i) {
                             val[i] += __shfl_sync(sync_mask, val[i], target_lane);
                         }
                     }
 
-                    same_mask &= ~(1 << target_lane);
+                    same_mask &= ~gsgn_lane_bit(target_lane);
                 }
 
                 // leader sends an atomicAdd per parameter
@@ -174,7 +192,12 @@ namespace CudaRasterizer {
             __shared__ char rendered_cache[NUM_WARPS][sizeof(GeometryStateReduced)];
             __shared__ float unactivated_opacity[NUM_WARPS];
             
-            using WarpScan = cub::WarpScan<int>;
+            // Pin the logical warp width to 32. hipCUB defaults LOGICAL_WARP_THREADS
+            // to warpSize (64 on gfx90a); the surrounding code partitions the block
+            // into 32-lane warps with temp_storage[NUM_WARPS] and a [NUM_WARPS][32]
+            // layout, so an unpinned 64-wide scan would fold two logical warps into
+            // one TempStorage slot and corrupt the per-warp ExclusiveSum offset.
+            using WarpScan = cub::WarpScan<int, GSGN_LOGICAL_WARP_SIZE>;
             __shared__ typename WarpScan::TempStorage temp_storage[NUM_WARPS];
 
             // In the forward, we stored the final value for T, the
@@ -355,7 +378,7 @@ namespace CudaRasterizer {
 
                     // get gradients w.r.t. opacity of the Gaussian
                     scalar_t dalpha_dopacity = G;
-                    dalpha_dopacity = (scalar_t) dsigmoidvdv(unactivated_opacity[warp_id], dalpha_dopacity);
+                    dalpha_dopacity = (scalar_t) dsigmoidvdv((scalar_t) unactivated_opacity[warp_id], dalpha_dopacity);
                     int32_t pos_out = get_vector_position<GAUSSIAN_ATTRIBUTE::OPACITY>(global_id, 0, 0, data);
 
                     atom_ptrs[8] = &r_vec[pos_out];
@@ -1375,7 +1398,9 @@ namespace CudaRasterizer {
                 dL_dconic2D.z = -0.5f * gdy * d.y * dL_dG;
 
                 // get gradients w.r.t. opacity of the Gaussian
-                d_opacity = (scalar_t) dsigmoidvdv(attr_ptr->unactivated_opacity, d_opacity);
+                // cast the float input to scalar_t so the float/double overload is
+                // unambiguous when scalar_t == double (clang is stricter than nvcc).
+                d_opacity = (scalar_t) dsigmoidvdv((scalar_t) attr_ptr->unactivated_opacity, d_opacity);
 
                 // gradient w.r.t opacity
                 scalar_t jx = d_opacity * x_vec_opacity_cache[0];
@@ -1532,7 +1557,7 @@ namespace CudaRasterizer {
                 #pragma unroll
                 for(int i = 0; i < 3; i++) {
                     scalar_t grad = gaussian_cache_ptr->R[i] * dL_dMt[i * 3] + gaussian_cache_ptr->R[i + 3] * dL_dMt[i * 3 + 1] + gaussian_cache_ptr->R[i + 6] * dL_dMt[i * 3 + 2];
-                    grad = dexpvdv(attr_ptr->unactivated_scale[i], grad);
+                    grad = dexpvdv((scalar_t) attr_ptr->unactivated_scale[i], grad);
                     jx += grad * x_vec_scale_cache[i];
                 }
 
@@ -1613,7 +1638,8 @@ namespace CudaRasterizer {
             }
 
             // determine how many gaussians in this image & if the thread is out of bounds
-            unsigned int mask = __ballot_sync(FULL_MASK, idx < stride);
+            // 64-bit on HIP so __ballot_sync over the full wavefront is not truncated.
+            GSGN_LANE_MASK mask = __ballot_sync(FULL_MASK, idx < stride);
 
             // load per-gaussian attributes into shared memory -- they are used by consecutive threads in this block
             // we load them in parallel, which is hopefully faster than if every thread loads it from global memory separately
@@ -1734,8 +1760,13 @@ namespace CudaRasterizer {
             }
             __syncthreads();
 
-            // Specialize WarpReduce for type scalar_t
-            typedef cub::WarpReduce<scalar_t> WarpReduce;
+            // Specialize WarpReduce for type scalar_t. Pin the logical warp width
+            // to 32: hipCUB defaults to warpSize (64 on gfx90a) but the segmented
+            // reduce is grouped per 32-lane logical warp (lane_id = tid % 32,
+            // temp_storage[NUM_WARPS], head_flag from a width-32 shfl_up). An
+            // unpinned 64-wide HeadSegmentedSum would span both logical warps and
+            // race on the shared TempStorage slot.
+            typedef cub::WarpReduce<scalar_t, GSGN_LOGICAL_WARP_SIZE> WarpReduce;
 
             // Allocate WarpReduce shared memory for all warps
             __shared__ typename WarpReduce::TempStorage temp_storage[NUM_WARPS];
@@ -1773,7 +1804,10 @@ namespace CudaRasterizer {
             // determine if we are at the end of a gaussian (assumes index_map is sorted by global_id and ray_id)
             // is FAST because we use the warp intrinsic
             const int32_t global_id = global_id_cache[gaussian_idx];
-            const int32_t prev_global_id = __shfl_up_sync(mask, global_id, 1);
+            // Width-32: confine the head detection to this thread's 32-lane logical
+            // warp. On wave64 lane 32 must read its own group's lane 31, not the
+            // sibling group's; lane_id == 0 (== tid % 32) forces the group head.
+            const int32_t prev_global_id = __shfl_up_sync(mask, global_id, 1, GSGN_LOGICAL_WARP_SIZE);
             const bool head_flag = (lane_id == 0) || (global_id != prev_global_id);
 
             const int ray_id = index_map[img_id][idx];
@@ -1853,7 +1887,9 @@ namespace CudaRasterizer {
                 dL_dconic2D.z = -0.5f * gdy * d.y * dL_dG;
 
                 // get gradients w.r.t. opacity of the Gaussian
-                d_opacity = (scalar_t) dsigmoidvdv(attr_ptr->unactivated_opacity, d_opacity);
+                // cast the float input to scalar_t so the float/double overload is
+                // unambiguous when scalar_t == double (clang is stricter than nvcc).
+                d_opacity = (scalar_t) dsigmoidvdv((scalar_t) attr_ptr->unactivated_opacity, d_opacity);
 
                 // opacity grad
                 scalar_t grad;
@@ -1977,7 +2013,8 @@ namespace CudaRasterizer {
 
                 // do warp-reduce over all threads that reference the same gaussian_id
                 grad_sum = WarpReduce(temp_storage[warp_id]).HeadSegmentedSum(grad, head_flag);
-                __syncwarp(mask);
+                // reached after the radius_gt_zero `continue` above: maskless on HIP.
+                GSGN_SYNCWARP_AFTER_DIVERGENCE(mask);
                 
                 // write out value
                 // is COALESCED because global_id is sequentially increasing and channel/attribute_idx is constant in a block
@@ -2003,7 +2040,8 @@ namespace CudaRasterizer {
 
                         // do warp-reduce over all threads that reference the same gaussian_id
                         grad_sum = WarpReduce(temp_storage[warp_id]).HeadSegmentedSum(grad, head_flag);
-                        __syncwarp(mask);
+                        // reached after the radius_gt_zero `continue` above: maskless on HIP.
+                        GSGN_SYNCWARP_AFTER_DIVERGENCE(mask);
                         
                         // write out value
                         // is COALESCED because global_id is sequentially increasing and channel/attribute_idx is constant in a block
@@ -2035,7 +2073,8 @@ namespace CudaRasterizer {
 
                             // do warp-reduce over all threads that reference the same gaussian_id
                             grad_sum = WarpReduce(temp_storage[warp_id]).HeadSegmentedSum(grad, head_flag);
-                            __syncwarp(mask);
+                            // reached after the radius_gt_zero `continue` above: maskless on HIP.
+                            GSGN_SYNCWARP_AFTER_DIVERGENCE(mask);
                             
                             // write out value
                             // is COALESCED because global_id is sequentially increasing and channel/attribute_idx is constant in a block
@@ -2066,7 +2105,8 @@ namespace CudaRasterizer {
 
                                 // do warp-reduce over all threads that reference the same gaussian_id
                                 grad_sum = WarpReduce(temp_storage[warp_id]).HeadSegmentedSum(grad, head_flag);
-                                __syncwarp(mask);
+                                // reached after the radius_gt_zero `continue` above: maskless on HIP.
+                                GSGN_SYNCWARP_AFTER_DIVERGENCE(mask);
                                 
                                 // write out value
                                 // is COALESCED because global_id is sequentially increasing and channel/attribute_idx is constant in a block
@@ -2104,7 +2144,8 @@ namespace CudaRasterizer {
 
                     // do warp-reduce over all threads that reference the same gaussian_id
                     grad_sum = WarpReduce(temp_storage[warp_id]).HeadSegmentedSum(grad, head_flag);
-                    __syncwarp(mask);
+                    // reached after the radius_gt_zero `continue` above: maskless on HIP.
+                    GSGN_SYNCWARP_AFTER_DIVERGENCE(mask);
                     
                     // write out value
                     // is COALESCED because global_id is sequentially increasing and channel/attribute_idx is constant in a block
@@ -2138,7 +2179,7 @@ namespace CudaRasterizer {
                 #pragma unroll
                 for(int i = 0; i < 3; i++) {
                     grad = gaussian_cache_ptr->R[i] * dL_dMt[i * 3] + gaussian_cache_ptr->R[i + 3] * dL_dMt[i * 3 + 1] + gaussian_cache_ptr->R[i + 6] * dL_dMt[i * 3 + 2];
-                    grad = dexpvdv(attr_ptr->unactivated_scale[i], grad);
+                    grad = dexpvdv((scalar_t) attr_ptr->unactivated_scale[i], grad);
                     if constexpr(M == GSGN_MODE::PRECONDITIONER) {
                         grad = grad * grad;
                     } else {
@@ -2148,7 +2189,8 @@ namespace CudaRasterizer {
 
                     // do warp-reduce over all threads that reference the same gaussian_id
                     grad_sum = WarpReduce(temp_storage[warp_id]).HeadSegmentedSum(grad, head_flag);
-                    __syncwarp(mask);
+                    // reached after the radius_gt_zero `continue` above: maskless on HIP.
+                    GSGN_SYNCWARP_AFTER_DIVERGENCE(mask);
                     
                     // write out value
                     // is COALESCED because global_id is sequentially increasing and channel/attribute_idx is constant in a block
@@ -2189,7 +2231,8 @@ namespace CudaRasterizer {
 
                     // do warp-reduce over all threads that reference the same gaussian_id
                     grad_sum = WarpReduce(temp_storage[warp_id]).HeadSegmentedSum(grad, head_flag);
-                    __syncwarp(mask);
+                    // reached after the radius_gt_zero `continue` above: maskless on HIP.
+                    GSGN_SYNCWARP_AFTER_DIVERGENCE(mask);
                     
                     // write out value
                     // is COALESCED because global_id is sequentially increasing and channel/attribute_idx is constant in a block
@@ -2236,7 +2279,8 @@ namespace CudaRasterizer {
             constexpr uint32_t NUM_WARPS = SPARSE_JT_NUM_THREADS / 32;
 
             // determine how many gaussians in this image & if the thread is out of bounds
-            unsigned int mask = __ballot_sync(FULL_MASK, idx < stride);
+            // 64-bit on HIP so __ballot_sync over the full wavefront is not truncated.
+            GSGN_LANE_MASK mask = __ballot_sync(FULL_MASK, idx < stride);
 
             // load per-gaussian attributes into shared memory -- they are used by consecutive threads in this block
             // we load them in parallel, which is hopefully faster than if every thread loads it from global memory separately
@@ -2289,8 +2333,13 @@ namespace CudaRasterizer {
             }
             __syncthreads();
 
-            // Specialize WarpReduce for type scalar_t
-            typedef cub::WarpReduce<scalar_t> WarpReduce;
+            // Specialize WarpReduce for type scalar_t. Pin the logical warp width
+            // to 32: hipCUB defaults to warpSize (64 on gfx90a) but the segmented
+            // reduce is grouped per 32-lane logical warp (lane_id = tid % 32,
+            // temp_storage[NUM_WARPS], head_flag from a width-32 shfl_up). An
+            // unpinned 64-wide HeadSegmentedSum would span both logical warps and
+            // race on the shared TempStorage slot.
+            typedef cub::WarpReduce<scalar_t, GSGN_LOGICAL_WARP_SIZE> WarpReduce;
 
             // Allocate WarpReduce shared memory for all warps
             __shared__ typename WarpReduce::TempStorage temp_storage[NUM_WARPS];
@@ -2314,7 +2363,10 @@ namespace CudaRasterizer {
             // determine if we are at the end of a gaussian (assumes index_map is sorted by global_id and ray_id)
             // is FAST because we use the warp intrinsic
             const int32_t global_id = global_id_cache[gaussian_idx];
-            const int32_t prev_global_id = __shfl_up_sync(mask, global_id, 1);
+            // Width-32: confine the head detection to this thread's 32-lane logical
+            // warp. On wave64 lane 32 must read its own group's lane 31, not the
+            // sibling group's; lane_id == 0 (== tid % 32) forces the group head.
+            const int32_t prev_global_id = __shfl_up_sync(mask, global_id, 1, GSGN_LOGICAL_WARP_SIZE);
             const bool head_flag = (lane_id == 0) || (global_id != prev_global_id);
 
             const int ray_id = index_map[idx];
