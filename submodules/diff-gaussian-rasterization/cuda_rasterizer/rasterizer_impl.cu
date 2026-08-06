@@ -18,14 +18,18 @@
 #include <numeric>
 #include <cuda.h>
 #include "cuda_runtime.h"
-#include "device_launch_parameters.h"
+#if !defined(USE_ROCM)
+#include "device_launch_parameters.h"  // CUDA-toolkit IntelliSense header, no ROCm equivalent; symbols are hipcc intrinsics
+#endif
 #include <cub/cub.cuh>
 #include <cub/device/device_radix_sort.cuh>
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
 
 #include <cooperative_groups.h>
-#include <cooperative_groups/reduce.h>
+#if !defined(USE_ROCM)
+#include <cooperative_groups/reduce.h>  // HIP has no cg::reduce header; only this_grid/this_thread_block are used here
+#endif
 namespace cg = cooperative_groups;
 
 #include "auxiliary.h"
@@ -149,7 +153,7 @@ void CudaRasterizer::Rasterizer::markVisible(
 	float* projmatrix,
 	bool* present)
 {
-	checkFrustum << <(P + 255) / 256, 256 >> > (
+	checkFrustum<<<(P + 255) / 256, 256>>>(
 		P,
 		means3D,
 		viewmatrix, projmatrix,
@@ -307,7 +311,7 @@ std::tuple<int, int64_t> CudaRasterizer::Rasterizer::forward(
 
 	// For each instance to be rendered, produce adequate [ tile | depth ] key 
 	// and corresponding dublicated Gaussian indices to be sorted
-	duplicateWithKeys << <(P + 255) / 256, 256 >> > (
+	duplicateWithKeys<<<(P + 255) / 256, 256>>>(
 		P,
 		geomState.means2D,
 		geomState.depths,
@@ -332,7 +336,7 @@ std::tuple<int, int64_t> CudaRasterizer::Rasterizer::forward(
 
 	// Identify start and end of per-tile workloads in sorted list
 	if (num_rendered > 0)
-		identifyTileRanges << <(num_rendered + 255) / 256, 256 >> > (
+		identifyTileRanges<<<(num_rendered + 255) / 256, 256>>>(
 			num_rendered,
             binningState.point_list_keys,
 			imgState.ranges);

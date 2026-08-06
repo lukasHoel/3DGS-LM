@@ -286,12 +286,33 @@ std::tuple<torch::Tensor, std::vector<torch::Tensor>, std::vector<torch::Tensor>
         int n_elem = data.num_sparse_gaussians[i];
 
         // each jacobian is a one-dimensional tensor that we index in the kernel in a custom way
+#if defined(USE_ROCM)
+        // The sparse-Jacobian emit (eval_jtf_sparse_render_bkwd_kernel) reserves
+        // n_contrib_vol_rend slots per warp but can write a few fewer at large
+        // scale, leaving reserved-but-unwritten trailing slots. On NVIDIA the
+        // allocator zero-fills torch::empty and an out-of-range geomBuffer read
+        // is a benign in-chunk over-read; on ROCm those uninitialized slots make
+        // the consumer read geomBuffer[map_visible[garbage]] and page-fault.
+        // Pre-fill the reserved slots with a guaranteed-visible Gaussian
+        // (map_cache_to_gaussians[i][0] -> geomBuffer index 0) and ray 0, with a
+        // zeroed Jacobian below, so any unwritten slot is an in-bounds,
+        // exactly-zero-contribution entry. The emit overwrites the real entries.
+        torch::Tensor sparse_jac = torch::zeros({n_elem * per_gaussian_sparse_jac_size}, options.dtype(at::kHalf));
+#else
         torch::Tensor sparse_jac = torch::empty({n_elem * per_gaussian_sparse_jac_size}, options.dtype(at::kHalf));
+#endif
         sparse_jacobians.push_back(sparse_jac);
         sparse_jacobians_ptr[i] = (__half*) sparse_jac.contiguous().data_ptr<at::Half>();
 
         // the index_map maps each entry in the jacobian to its gaussian_id (== index in data.means3D etc.)
         torch::Tensor index_map = torch::empty({n_elem * 2}, options.dtype(torch::kInt32));
+#if defined(USE_ROCM)
+        {
+            int first_vis_gid = data.map_cache_to_gaussians[i].index({0}).item<int>();
+            index_map.slice(0, 0, n_elem).fill_(first_vis_gid);   // gaussian-id half -> a visible Gaussian
+            index_map.slice(0, n_elem, 2 * n_elem).fill_(0);       // ray-id half -> ray 0 (in bounds)
+        }
+#endif
         index_maps.push_back(index_map);
         index_maps_ptr[i] = index_map.contiguous().data_ptr<int>();
 

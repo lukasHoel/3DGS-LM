@@ -317,7 +317,11 @@ __forceinline__ __device__ bool in_frustum(int idx,
 		if (prefiltered)
 		{
 			printf("Point is filtered although prefiltered is set. This shouldn't happen!");
+#if defined(USE_ROCM)
+			__builtin_trap();  // HIP does not provide CUDA's __trap()
+#else
 			__trap();
+#endif
 		}
 		return false;
 	}

@@ -11,6 +11,7 @@
 
 #include "backward.h"
 #include "auxiliary.h"
+#include "hip_warp_compat.h"
 #include <cooperative_groups.h>
 #include <iostream>
 
@@ -409,39 +410,42 @@ __global__ void preprocessCUDA(
 }
 
 // DISTWAR - serialized atomic reduction (SW-S)
+// See atomred_vec in gsgn.cu: leader election spans the full hardware wavefront
+// on HIP (64-bit same-primitive mask) since the recombination is via atomicAdd.
+// laneId/sync_mask are wavefront-relative (gsgn_wave_lane() == (ty*bdx+tx)&31 on CUDA).
 template<typename ATOM_T>
 __device__ void atomred_vec(size_t idx, ATOM_T** ptr, ATOM_T *val, size_t len, unsigned balance_threshold) {
-    unsigned laneId = (threadIdx.y * blockDim.x + threadIdx.x) & 31;
+    unsigned laneId = gsgn_wave_lane();
 
 	// a mask of threads in the warp updating the same primitive
-    unsigned same_mask = __match_any_sync(__activemask(), idx);
+    GSGN_LANE_MASK same_mask = __match_any_sync(__activemask(), idx);
 
 	// number of threads in the warp updating the same primitive
-    unsigned same_ct = __popc(same_mask);
+    unsigned same_ct = gsgn_popc(same_mask);
 
 	/* if number of threads updating current
 	primitive exceeds balance threshold, perform
 	serialized warp level reduction */
     if (same_ct >= balance_threshold) {
 		// thread with lowest id becomes the leader
-		unsigned leader = __ffs(same_mask) - 1;
+		unsigned leader = gsgn_ffs(same_mask) - 1;
 
 		// leader does not fetch from itself
-		same_mask &= ~(1 << leader);
+		same_mask &= ~gsgn_lane_bit(leader);
 
 		/* leader fetch and accumulate all parameters
     	from threads updating the same primitive */
         while (same_mask) {
-            unsigned target_lane = __ffs(same_mask) - 1;
+            unsigned target_lane = gsgn_ffs(same_mask) - 1;
             if (laneId == leader || laneId == target_lane) {
-                unsigned sync_mask = (1 << leader) | (1 << target_lane);
+                GSGN_LANE_MASK sync_mask = gsgn_lane_bit(leader) | gsgn_lane_bit(target_lane);
 
                 for (unsigned i = 0; i < len; ++i) {
                     val[i] += __shfl_sync(sync_mask, val[i], target_lane);
                 }
             }
 
-            same_mask &= ~(1 << target_lane);
+            same_mask &= ~gsgn_lane_bit(target_lane);
         }
 
 		// leader sends an atomicAdd per parameter
@@ -760,7 +764,10 @@ renderCUDABW_butterfly(
 
 			// DISTWAR - after alpha copmutation, check if there is any active thread
 			//           if there is no active thread, all threads skip to next iteration
-            int active_ct = __popc(__ballot_sync(__activemask(), !skip));
+			// Full-wavefront count so the early-out below stays uniform on wave64:
+			// a per-32-group continue would let one logical warp exit while its
+			// wavefront sibling reaches the __match_any_sync below, which faults.
+            int active_ct = gsgn_popc(__ballot_sync(__activemask(), !skip));
 			if (active_ct == 0) continue;
 
 			if (!skip)
@@ -821,19 +828,28 @@ renderCUDABW_butterfly(
 			// DISTWAR - butterfly reduction (SW-B) can only be performed if
 			//			 all 32 threads are updating the same gaussian (global_id)
 			//			 and the number of active threads exceeds the preset balance threshold
-			if (__match_any_sync(__activemask(), global_id) == 0xFFFFFFFF && active_ct >= balance_threshold) {
+			// On wave64 the entry test is per 32-lane logical warp: "full warp"
+			// == (match mask & group range) == group range. The shfl_down stays
+			// width-32 (so the reduction is per group regardless of its mask) and
+			// each group's lane 0 (laneId == 0 holds at wavefront lanes 0 and 32)
+			// atomicAdds its group's sum -- one atomicAdd per 32-warp, identical
+			// to CUDA. The shuffle participation mask is the active set
+			// (gsgn_active_shfl_mask), not a fixed half-mask, because both groups
+			// may enter the butterfly together (then __ballot(true) is all 64).
+			GSGN_LANE_MASK group_mask = gsgn_logical_warp_mask();
+			if ((__match_any_sync(__activemask(), global_id) & group_mask) == group_mask && active_ct >= balance_threshold) {
 
 				// DISTWAR - gather the gradient updates to thread 0 with butterfly reduction
                 for (int offset = 16; offset >= 1; offset /= 2) {
-                    dmeanX += __shfl_down_sync(0xFFFFFFFF, dmeanX, offset);
-                    dmeanY += __shfl_down_sync(0xFFFFFFFF, dmeanY, offset);
-                    dconicX += __shfl_down_sync(0xFFFFFFFF, dconicX, offset);
-                    dconicY += __shfl_down_sync(0xFFFFFFFF, dconicY, offset);
-                    dconicW += __shfl_down_sync(0xFFFFFFFF, dconicW, offset);
-                    dopacity += __shfl_down_sync(0xFFFFFFFF, dopacity, offset);
-					dcolors[0] += __shfl_down_sync(0xFFFFFFFF, dcolors[0], offset);
-					dcolors[1] += __shfl_down_sync(0xFFFFFFFF, dcolors[1], offset);
-					dcolors[2] += __shfl_down_sync(0xFFFFFFFF, dcolors[2], offset);
+                    dmeanX += __shfl_down_sync(gsgn_active_shfl_mask(), dmeanX, offset, 32);
+                    dmeanY += __shfl_down_sync(gsgn_active_shfl_mask(), dmeanY, offset, 32);
+                    dconicX += __shfl_down_sync(gsgn_active_shfl_mask(), dconicX, offset, 32);
+                    dconicY += __shfl_down_sync(gsgn_active_shfl_mask(), dconicY, offset, 32);
+                    dconicW += __shfl_down_sync(gsgn_active_shfl_mask(), dconicW, offset, 32);
+                    dopacity += __shfl_down_sync(gsgn_active_shfl_mask(), dopacity, offset, 32);
+					dcolors[0] += __shfl_down_sync(gsgn_active_shfl_mask(), dcolors[0], offset, 32);
+					dcolors[1] += __shfl_down_sync(gsgn_active_shfl_mask(), dcolors[1], offset, 32);
+					dcolors[2] += __shfl_down_sync(gsgn_active_shfl_mask(), dcolors[2], offset, 32);
                 }
 
 				// DISTWAR - thread 0 sends the reduced gradient updates with atomicAdd

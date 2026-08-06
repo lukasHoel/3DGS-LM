@@ -1,0 +1,15 @@
+# Build artifacts (torch hipify mirrors + extension builds).
+# torch's CUDAExtension hipify writes a parallel set of mirror files at build
+# time (a hip_* directory clone of cuda_rasterizer/, plus *.hip, ext_hip.cpp and
+# *_hip.{h,cuh,cpp}); only the CUDA-spelled sources are kept in the tree.
+*.hip
+*_hip.cuh
+*_hip.h
+*_hip.cpp
+ext_hip.cpp
+submodules/diff-gaussian-rasterization/hip_rasterizer/
+build/
+*.so
+*.egg-info/
+__pycache__/
+*.pyc
